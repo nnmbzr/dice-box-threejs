@@ -1563,6 +1563,113 @@ class DiceBox {
 			this.selectResolve = null;
 		}
 	}
+
+	// Добавляем новый метод для сохранения состояния
+	async saveState() {
+		// Проверяем, что нет активных бросков
+		if (this.rolling) {
+			throw new Error("Cannot save state while dice are rolling");
+		}
+
+		// Создаем объект состояния
+		const state = {
+			dice: this.diceList.map((dice) => ({
+				// Основная информация о дайсе
+				type: dice.notation.type,
+				position: {
+					x: dice.position.x,
+					y: dice.position.y,
+					z: dice.position.z,
+				},
+				quaternion: {
+					x: dice.quaternion.x,
+					y: dice.quaternion.y,
+					z: dice.quaternion.z,
+					w: dice.quaternion.w,
+				},
+				notation: dice.notation,
+				result: dice.result,
+				rerolls: dice.rerolls,
+				resultReason: dice.resultReason,
+				setName: dice.setName,
+			})),
+			notationVectors: this.notationVectors,
+		};
+
+		return state;
+	}
+
+	// Добавляем новый метод для загрузки состояния
+	async loadState(state) {
+		// Проверяем, что нет активных бросков
+		if (this.rolling) {
+			throw new Error("Cannot load state while dice are rolling");
+		}
+
+		// Очищаем текущее состояние
+		this.clearDice();
+
+		// Восстанавливаем notationVectors
+		this.notationVectors = state.notationVectors;
+
+		// Восстанавливаем каждый дайс
+		for (const diceState of state.dice) {
+			await this.loadTheme(diceState.setName);
+
+			// Создаем новый дайс
+			const dicemesh = this.DiceFactory.create(diceState.type);
+			if (!dicemesh) continue;
+
+			// Восстанавливаем позицию и поворот
+			dicemesh.position.set(
+				diceState.position.x,
+				diceState.position.y,
+				diceState.position.z
+			);
+			dicemesh.quaternion.set(
+				diceState.quaternion.x,
+				diceState.quaternion.y,
+				diceState.quaternion.z,
+				diceState.quaternion.w
+			);
+
+			// Восстанавливаем остальные свойства
+			dicemesh.notation = diceState.notation;
+			dicemesh.result = diceState.result;
+			dicemesh.rerolls = diceState.rerolls;
+			dicemesh.resultReason = diceState.resultReason;
+			dicemesh.castShadow = this.shadows;
+
+			// Создаем физическое тело, сохраняя оригинальные параметры
+			dicemesh.body = new CANNON.Body({
+				mass: dicemesh.mass,
+				shape: dicemesh.geometry.cannon_shape,
+				material: this.dice_body_material,
+			});
+
+			// Устанавливаем позицию и поворот тела
+			dicemesh.body.position.copy(dicemesh.position);
+			dicemesh.body.quaternion.copy(dicemesh.quaternion);
+
+			// Переводим тело в кинематический режим и в спящее состояние
+			dicemesh.body.type = CANNON.Body.KINEMATIC;
+			dicemesh.body.sleep();
+			dicemesh.body.allowSleep = true;
+			dicemesh.body.sleepSpeedLimit = 75;
+			dicemesh.body.sleepTimeLimit = 0.9;
+
+			// Добавляем тело в мир и меш в сцену
+			this.world.addBody(dicemesh.body);
+			this.scene.add(dicemesh);
+			this.diceList.push(dicemesh);
+		}
+
+		// Обновляем рендер
+		this.renderer.render(this.scene, this.camera);
+
+		// Возвращаем результаты текущего состояния
+		return this.getDiceResults();
+	}
 }
 
 export { DiceBox };

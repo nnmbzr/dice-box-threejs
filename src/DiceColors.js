@@ -87,6 +87,8 @@ export class DiceColors {
 			colorset.texture.material = options.material;
 		}
 
+		colorset.setName = setName;
+
 		// save it for later
 		this.colorsets[setName] = colorset;
 
