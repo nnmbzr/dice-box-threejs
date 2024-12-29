@@ -7,7 +7,7 @@ import { DiceColors } from "./DiceColors.js";
 import { THEMES } from "./const/themes.js";
 // import CannonDebugger from 'cannon-es-debugger'
 
-import { debounce } from "./helpers";
+import { debounce, getRandomSign } from "./helpers";
 
 const defaultConfig = {
 	assetPath: "./",
@@ -926,6 +926,7 @@ class DiceBox {
 
 		let reroll = false;
 
+		// TODO: WTF?? Эта проверка никогда не произойдёт, так как funcdata всегда undefined
 		if (diceFunc != "" && funcdata && funcdata.method) {
 			diceFunc = dicemesh.notation.func.toLowerCase();
 			let diceFuncArgs = dicemesh.notation.args || "";
@@ -1216,26 +1217,38 @@ class DiceBox {
 		this.rolling = true;
 		this.running = Date.now();
 		this.iteration = 0;
+		this.last_time = 0;
 		return new Promise((resolve, reject) => {
 			diceIdArray.forEach((dieId) => {
 				const dicemesh = this.diceList[dieId];
 				dicemesh.rerolls += 1;
 				dicemesh.rerolling = true;
-				dicemesh.body.wakeUp();
-				dicemesh.body.type = CANNON.Body.DYNAMIC;
-				dicemesh.body.angularVelocity = new CANNON.Vec3(25, 25, 25);
-				dicemesh.body.velocity = new CANNON.Vec3(0, 0, 3000);
+				dicemesh.body.angularVelocity = new CANNON.Vec3(
+					25 * getRandomSign(),
+					25 * getRandomSign(),
+					25 * getRandomSign()
+				);
+				dicemesh.body.velocity = new CANNON.Vec3(0, 0, 2000);
+
+				setTimeout(() => {
+					dicemesh.body.wakeUp();
+					dicemesh.body.type = CANNON.Body.DYNAMIC;
+				});
 			});
-			this.animateThrow(this.running, () => {
-				const results = diceIdArray.map((dieId) => this.getDiceResults(dieId));
+			setTimeout(() => {
+				this.animateThrow(this.running, () => {
+					const results = diceIdArray.map((dieId) =>
+						this.getDiceResults(dieId)
+					);
 
-				this.onRerollComplete(results);
+					this.onRerollComplete(results);
 
-				// dispatch an event with the results object for other UI elements to listen for
-				const event = new CustomEvent("rerollComplete", { detail: results });
-				document.dispatchEvent(event);
+					// dispatch an event with the results object for other UI elements to listen for
+					const event = new CustomEvent("rerollComplete", { detail: results });
+					document.dispatchEvent(event);
 
-				resolve(results);
+					resolve(results);
+				});
 			});
 		});
 	}
@@ -1368,6 +1381,187 @@ class DiceBox {
 		this.running = Date.now();
 		this.last_time = 0;
 		this.animateThrow(this.running, callback);
+	}
+
+	async selectDice(
+		diceIdArray,
+		options = { color: 0x00ff00, intensityIdle: 0.3, intensityHover: 0.5 }
+	) {
+		// Создаем raycaster для определения пересечений
+		this.raycaster = new THREE.Raycaster();
+		this.mouse = new THREE.Vector2();
+		this.selectionOptions = options;
+
+		// Включаем режим выбора только для указанных кубиков
+		this.selectableDice = new Set(diceIdArray);
+
+		// Запускаем отдельный цикл рендеринга для режима выбора
+		this.selectionMode = true;
+		this.renderSelectionMode();
+
+		// Подсвечиваем доступные для выбора кубики
+		diceIdArray.forEach((id) => {
+			const dicemesh = this.diceList[id];
+			if (dicemesh) {
+				// Сохраняем оригинальные материалы
+				dicemesh.originalMaterials = dicemesh.material.map((m) => m.clone());
+				// Добавляем эффект подсветки
+				dicemesh.material.forEach((material) => {
+					material.emissive = new THREE.Color(this.selectionOptions.color);
+					material.emissiveIntensity = this.selectionOptions.intensityIdle;
+					material.needsUpdate = true;
+				});
+			}
+		});
+
+		// Добавляем обработчики событий
+		this.container.style.cursor = "pointer";
+
+		// Mouse events
+		this.onClick = this.handleDiceClick.bind(this);
+		this.onMouseMove = this.handleMouseMove.bind(this);
+
+		// Touch events
+		this.onTouchStart = this.handleTouchStart.bind(this);
+		this.onTouchEnd = this.handleTouchEnd.bind(this);
+
+		// Mouse listeners
+		this.container.addEventListener("click", this.onClick);
+		this.container.addEventListener("mousemove", this.onMouseMove);
+
+		// Touch listeners
+		this.container.addEventListener("touchstart", this.onTouchStart, {
+			passive: false,
+		});
+		this.container.addEventListener("touchend", this.onTouchEnd);
+
+		// Возвращаем Promise, который разрешится когда кубик будет выбран
+		return new Promise((resolve) => {
+			this.selectResolve = resolve;
+		});
+	}
+
+	renderSelectionMode() {
+		if (!this.selectionMode) return;
+
+		// Запускаем следующий кадр только если все еще в режиме выбора
+		requestAnimationFrame(this.renderSelectionMode.bind(this));
+		this.renderer.render(this.scene, this.camera);
+	}
+
+	updateRaycaster(normalizedX, normalizedY) {
+		this.mouse.x = normalizedX;
+		this.mouse.y = normalizedY;
+
+		// Обновляем положение луча
+		this.raycaster.setFromCamera(this.mouse, this.camera);
+
+		// Находим пересечения
+		const intersects = this.raycaster.intersectObjects(this.diceList);
+
+		// Обновляем вид курсора и подсветку
+		let hoveredDice = false;
+		this.diceList.forEach((dice) => {
+			if (!this.selectableDice.has(this.diceList.indexOf(dice))) return;
+
+			const isIntersected = intersects[0]?.object === dice;
+			dice.material.forEach((material) => {
+				material.emissiveIntensity = isIntersected
+					? this.selectionOptions.intensityHover
+					: this.selectionOptions.intensityIdle;
+				material.needsUpdate = true;
+			});
+			if (isIntersected) hoveredDice = true;
+		});
+
+		this.container.style.cursor = hoveredDice ? "pointer" : "default";
+		return intersects;
+	}
+
+	handleMouseMove(event) {
+		const rect = this.container.getBoundingClientRect();
+		const normalizedX =
+			((event.clientX - rect.left) / this.container.clientWidth) * 2 - 1;
+		const normalizedY =
+			-((event.clientY - rect.top) / this.container.clientHeight) * 2 + 1;
+
+		this.updateRaycaster(normalizedX, normalizedY);
+	}
+
+	handleTouchStart(event) {
+		event.preventDefault(); // Предотвращаем двойной тап для зума на мобильных
+		// Сохраняем начальную позицию касания для определения тапа
+		if (event.touches.length === 1) {
+			const touch = event.touches[0];
+			this.touchStartX = touch.clientX;
+			this.touchStartY = touch.clientY;
+		}
+	}
+
+	handleTouchEnd(event) {
+		event.preventDefault();
+
+		// Проверяем, был ли это тап (без значительного движения)
+		if (this.touchStartX !== undefined && this.touchStartY !== undefined) {
+			const touchEndX = event.changedTouches[0].clientX;
+			const touchEndY = event.changedTouches[0].clientY;
+
+			// Определяем, был ли это тап (перемещение менее 10 пикселей)
+			const dx = Math.abs(touchEndX - this.touchStartX);
+			const dy = Math.abs(touchEndY - this.touchStartY);
+
+			if (dx < 10 && dy < 10) {
+				// Это был тап - обрабатываем как клик
+				const rect = this.container.getBoundingClientRect();
+				const normalizedX =
+					((touchEndX - rect.left) / this.container.clientWidth) * 2 - 1;
+				const normalizedY =
+					-((touchEndY - rect.top) / this.container.clientHeight) * 2 + 1;
+
+				const intersects = this.updateRaycaster(normalizedX, normalizedY);
+				this.diceSelected(intersects);
+			}
+		}
+	}
+
+	handleDiceClick(event) {
+		const intersects = this.raycaster.intersectObjects(this.diceList);
+		this.diceSelected(intersects);
+	}
+
+	diceSelected(intersects) {
+		if (intersects.length === 0) return;
+
+		const selectedDice = intersects[0].object;
+		const diceId = this.diceList.indexOf(selectedDice);
+
+		// Проверяем, что кубик доступен для выбора
+		if (!this.selectableDice.has(diceId)) return;
+
+		// Отключаем режим выбора
+		this.selectionMode = false;
+
+		// Отключаем обработчики событий
+		this.container.removeEventListener("click", this.onClick);
+		this.container.removeEventListener("mousemove", this.onMouseMove);
+		this.container.removeEventListener("touchstart", this.onTouchStart);
+		this.container.removeEventListener("touchend", this.onTouchEnd);
+
+		this.container.style.cursor = "default";
+
+		// Восстанавливаем оригинальные материалы для всех кубиков
+		this.diceList.forEach((dice) => {
+			if (dice.originalMaterials) {
+				dice.material = dice.originalMaterials;
+				delete dice.originalMaterials;
+			}
+		});
+
+		// Разрешаем Promise с ID выбранного кубика
+		if (this.selectResolve) {
+			this.selectResolve(diceId);
+			this.selectResolve = null;
+		}
 	}
 }
 
