@@ -3,14 +3,12 @@
  * (c) 2021 Chris Ferdinandi, MIT License, https://gomakethings.com
  * @param  {Function} fn The function to debounce
  */
- export const debounce = (fn) => {
-
+export const debounce = (fn) => {
 	// Setup a timer
 	let timeout;
 
 	// Return a function to run debounced
 	return function () {
-
 		// Setup the arguments
 		let context = this;
 		let args = arguments;
@@ -25,4 +23,8 @@
 			fn.apply(context, args);
 		});
 	};
-}
+};
+
+export const getRandomSign = () => {
+	return Math.random() < 0.5 ? -1 : 1;
+};
